@@ -55,7 +55,12 @@ ddp.solve()
 solver = ipcroco.SolverIpOpt(problem)
 solver.solve()
 
-display = crocoddyl.GepettoDisplay(talos_arm)
-display.display(solver.xs, dts=[dt] * len(solver.xs), factor=4)
+xs = solver.xs
+us = solver.us
+
+solver.solve(xs, us, 40)
+
+# display = crocoddyl.GepettoDisplay(talos_arm)
+# display.display(solver.xs, dts=[dt] * len(solver.xs), factor=4)
 
 pass

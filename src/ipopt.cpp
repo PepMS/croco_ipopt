@@ -20,6 +20,14 @@ bool SolverIpOpt::solve(const std::vector<Eigen::VectorXd>& init_xs,
                         const std::vector<Eigen::VectorXd>& init_us,
                         const std::size_t                   maxiter)
 {
+    assert(init_xs.size() == ms_nlp_->get_problem()->get_T() + 1);
+    assert(init_us.size() == ms_nlp_->get_problem()->get_T());
+
+    ms_nlp_->set_us(init_us);
+    ms_nlp_->set_xs(init_xs);
+
+    app_->Options()->SetIntegerValue("max_iter", maxiter);
+
     return solve();
 }
 

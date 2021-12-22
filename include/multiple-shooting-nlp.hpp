@@ -111,21 +111,30 @@ class MultipleShootingNlp : public Ipopt::TNLP
 
     const std::size_t &get_nvar() const;
 
-    const std::vector<Eigen::VectorXd> &get_xs() const;
-    const std::vector<Eigen::VectorXd> &get_us() const;
+    const std::vector<Eigen::VectorXd>                  &get_xs() const;
+    const std::vector<Eigen::VectorXd>                  &get_us() const;
+    const boost::shared_ptr<crocoddyl::ShootingProblem> &get_problem() const;
+
+      void set_xs(const std::vector<Eigen::VectorXd>& xs);
+      void set_us(const std::vector<Eigen::VectorXd>& us);
+
 
     private:
     boost::shared_ptr<crocoddyl::ShootingProblem> problem_;
+    boost::shared_ptr<crocoddyl::StateAbstract>   state_;
 
     std::vector<Eigen::VectorXd> xs_;
     std::vector<Eigen::VectorXd> us_;
 
     std::size_t nx_;
+    std::size_t ndx_;
     std::size_t nu_;
     std::size_t T_;
 
     std::size_t nconst_;
     std::size_t nvar_;
+
+    bool is_manifold_;
 
     /**@name Methods to block default compiler methods.
      *

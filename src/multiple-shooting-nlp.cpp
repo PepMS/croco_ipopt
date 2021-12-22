@@ -14,13 +14,21 @@
 MultipleShootingNlp::MultipleShootingNlp(const boost::shared_ptr<crocoddyl::ShootingProblem> &problem)
     : problem_(problem),
       nx_(problem_->get_nx()),
+      ndx_(problem_->get_ndx()),
       nu_(problem_->get_nu_max()),
       T_(problem_->get_T()),
-      nvar_(T_ * (nx_ + nu_) + nx_),  // Multiple shooting, states and controls
-      nconst_((T_ + 1) * nx_)         // T*nx eq. constraints for dynamics , nx eq constraints for initial conditions
+      nconst_((T_ + 1) * nx_),          // T*nx eq. constraints for dynamics , nx eq constraints for initial conditions
+      nvar_(T_ * (ndx_ + nu_) + ndx_),  // Multiple shooting, states and controls
+      is_manifold_(nx_ != ndx_)
 {
     xs_.resize(T_ + 1);
     us_.resize(T_);
+
+    for (size_t i = 0; i < T_; i++) {
+        xs_[i] = problem_->get_runningModels()[0]->get_state()->zero();
+        us_[i] = Eigen::VectorXd::Zero(nu_);
+    }
+    xs_[T_] = xs_[0];
 }
 
 MultipleShootingNlp::~MultipleShootingNlp() {}
@@ -36,22 +44,22 @@ bool MultipleShootingNlp::get_nlp_info(Ipopt::Index   &n,
     m = nconst_;
 
     // Jacobian nonzeros for dynamic constraints
-    nnz_jac_g = T_ * nx_ * (2 * nx_ + nu_);
+    nnz_jac_g = T_ * ndx_ * (2 * ndx_ + nu_);
 
     // Jacobian nonzeros for initial conditiona
-    nnz_jac_g += nx_;
+    nnz_jac_g += ndx_;
 
     // Hessian is only affected by costs
     // Running Costs
     std::size_t nonzero = 0;
-    for (size_t i = 1; i <= (nx_ + nu_); i++) {
+    for (size_t i = 1; i <= (ndx_ + nu_); i++) {
         nonzero += i;
     }
     nnz_h_lag = T_ * nonzero;
 
     // Terminal Costs
     nonzero = 0;
-    for (size_t i = 1; i <= nx_; i++) {
+    for (size_t i = 1; i <= ndx_; i++) {
         nonzero += i;
     }
     nnz_h_lag += nonzero;
@@ -118,9 +126,23 @@ bool MultipleShootingNlp::get_starting_point(Ipopt::Index   n,
     assert(init_lambda == false);
 
     // initialize to the given starting point
-    for (size_t i = 0; i < nvar_; i++) {
-        x[i] = 0;
+    for (size_t i = 0; i < T_; i++) {
+        for (size_t j = 0; j < ndx_; j++) {
+            x[i * (ndx_ + nu_) + j] = 0;
+        }
+
+        for (size_t j = 0; j < nu_; j++) {
+            x[i * (ndx_ + nu_) + ndx_ + j] = us_[i](j);
+        }
     }
+
+    for (size_t j = 0; j < ndx_; j++) {
+            x[T_ * (ndx_ + nu_) + j] = 0;
+    }
+
+    // for (size_t i = 0; i < nvar_; i++) {
+    //     x[i] = 0;
+    // }
 
     return true;
 }
@@ -133,8 +155,8 @@ bool MultipleShootingNlp::eval_f(Ipopt::Index n, const Ipopt::Number *x, bool ne
     assert(n == nvar_);
 
     for (size_t i = 0; i < T_; i++) {
-        Eigen::VectorXd state   = Eigen::VectorXd::Map(x + i * (nx_ + nu_), nx_);
-        Eigen::VectorXd control = Eigen::VectorXd::Map(x + i * (nx_ + nu_) + nx_, nu_);
+        Eigen::VectorXd state   = Eigen::VectorXd::Map(x + i * (ndx_ + nu_), ndx_);
+        Eigen::VectorXd control = Eigen::VectorXd::Map(x + i * (ndx_ + nu_) + ndx_, nu_);
 
         problem_->get_runningModels()[i]->calc(problem_->get_runningDatas()[i], state, control);
 
@@ -457,8 +479,14 @@ bool MultipleShootingNlp::intermediate_callback(Ipopt::AlgorithmMode            
     return true;
 }
 
+void MultipleShootingNlp::set_xs(const std::vector<Eigen::VectorXd> &xs) { xs_ = xs; }
+
+void MultipleShootingNlp::set_us(const std::vector<Eigen::VectorXd> &us) { us_ = us; }
+
 const std::size_t &MultipleShootingNlp::get_nvar() const { return nvar_; }
 
 const std::vector<Eigen::VectorXd> &MultipleShootingNlp::get_xs() const { return xs_; }
 
 const std::vector<Eigen::VectorXd> &MultipleShootingNlp::get_us() const { return us_; }
+
+const boost::shared_ptr<crocoddyl::ShootingProblem> &MultipleShootingNlp::get_problem() const { return problem_; }
