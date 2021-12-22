@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.12)
 project(
-  libcrocoipopt
+  ipopt_croco
   VERSION 0.0.0
   LANGUAGES CXX)
 
@@ -9,31 +9,31 @@ list(INSERT CMAKE_MODULE_PATH 0 ${CMAKE_SOURCE_DIR}/cmake)
 find_package(crocoddyl REQUIRED)
 find_package(ipopt REQUIRED)
 
-# Library
+set(Python_ADDITIONAL_VERSIONS 3.6 3.7 3.8)
+find_package(Python3 REQUIRED Development Interpreter)
+set(WHICH_PYTHON3
+    "python3${Python3_VERSION_MINOR}"
+    CACHE STRING "Python3 version")
+find_package(
+  Boost
+  COMPONENTS ${WHICH_PYTHON3}
+  REQUIRED)
 
-add_library(croco_ipopt src/multiple-shooting-nlp.cpp src/ipopt.cpp)
+# Library
+add_library(${PROJECT_NAME} SHARED src/multiple-shooting-nlp.cpp src/ipopt.cpp)
 
 target_include_directories(
-  croco_ipopt
+  ${PROJECT_NAME}
   PUBLIC $<INSTALL_INTERFACE:include>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-target_compile_definitions(croco_ipopt PRIVATE cxx_std_14)
+target_compile_definitions(${PROJECT_NAME} PRIVATE cxx_std_14)
 
-target_link_libraries(croco_ipopt PUBLIC crocoddyl::crocoddyl ipopt)
+target_link_libraries(${PROJECT_NAME} PUBLIC crocoddyl::crocoddyl ipopt)
 
-# unicycle croco
-add_executable(unicycle src/unicycle.cpp)
+# Examples
+add_subdirectory(examples)
 
-target_include_directories(unicycle PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-
-target_link_libraries(unicycle PUBLIC crocoddyl::crocoddyl ipopt croco_ipopt)
-
-# unicycle raw
-add_executable(unicycle_raw src/unicycle_raw.cpp)
-
-target_include_directories(unicycle_raw
-                           PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-
-target_link_libraries(unicycle_raw PUBLIC crocoddyl::crocoddyl ipopt)
+# Bindings
+add_subdirectory(bindings)

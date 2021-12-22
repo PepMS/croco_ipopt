@@ -425,6 +425,7 @@ void MultipleShootingNlp::finalize_solution(Ipopt::SolverReturn               st
                                             const Ipopt::IpoptData           *ip_data,
                                             Ipopt::IpoptCalculatedQuantities *ip_cq)
 {
+    // Copy the solution to vector once solver is finished
     for (size_t i = 0; i < T_; i++) {
         Eigen::VectorXd state   = Eigen::VectorXd::Map(x + i * (nx_ + nu_), nx_);
         Eigen::VectorXd control = Eigen::VectorXd::Map(x + i * (nx_ + nu_) + nx_, nu_);
