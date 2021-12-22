@@ -27,8 +27,8 @@ bool SolverIpOpt::solve(const std::vector<Eigen::VectorXd>& init_xs,
     ms_nlp_->set_xs(init_xs);
 
     app_->Options()->SetIntegerValue("max_iter", maxiter);
-
-    return solve();
+    bool suceed = solve();
+    return suceed;
 }
 
 bool SolverIpOpt::solve()

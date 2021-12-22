@@ -13,11 +13,12 @@
 
 MultipleShootingNlp::MultipleShootingNlp(const boost::shared_ptr<crocoddyl::ShootingProblem> &problem)
     : problem_(problem),
+      state_(problem_->get_runningModels()[0]->get_state()),
       nx_(problem_->get_nx()),
       ndx_(problem_->get_ndx()),
       nu_(problem_->get_nu_max()),
       T_(problem_->get_T()),
-      nconst_((T_ + 1) * nx_),          // T*nx eq. constraints for dynamics , nx eq constraints for initial conditions
+      nconst_(T_ * ndx_ + nx_),         // T*nx eq. constraints for dynamics , nx eq constraints for initial conditions
       nvar_(T_ * (ndx_ + nu_) + ndx_),  // Multiple shooting, states and controls
       is_manifold_(nx_ != ndx_)
 {
@@ -46,7 +47,7 @@ bool MultipleShootingNlp::get_nlp_info(Ipopt::Index   &n,
     // Jacobian nonzeros for dynamic constraints
     nnz_jac_g = T_ * ndx_ * (2 * ndx_ + nu_);
 
-    // Jacobian nonzeros for initial conditiona
+    // Jacobian nonzeros for initial condition
     nnz_jac_g += ndx_;
 
     // Hessian is only affected by costs
@@ -118,14 +119,12 @@ bool MultipleShootingNlp::get_starting_point(Ipopt::Index   n,
                                              bool           init_lambda,
                                              Ipopt::Number *lambda)
 {
-    // Here, we assume we only have starting values for x, if you code
-    // your own NLP, you can provide starting values for the dual variables
-    // if you wish
     assert(init_x == true);
     assert(init_z == false);
     assert(init_lambda == false);
 
     // initialize to the given starting point
+    // State variable are always at 0 since they represent increments from the given initial point
     for (size_t i = 0; i < T_; i++) {
         for (size_t j = 0; j < ndx_; j++) {
             x[i * (ndx_ + nu_) + j] = 0;
@@ -137,12 +136,8 @@ bool MultipleShootingNlp::get_starting_point(Ipopt::Index   n,
     }
 
     for (size_t j = 0; j < ndx_; j++) {
-            x[T_ * (ndx_ + nu_) + j] = 0;
+        x[T_ * (ndx_ + nu_) + j] = 0;
     }
-
-    // for (size_t i = 0; i < nvar_; i++) {
-    //     x[i] = 0;
-    // }
 
     return true;
 }
@@ -154,16 +149,25 @@ bool MultipleShootingNlp::eval_f(Ipopt::Index n, const Ipopt::Number *x, bool ne
 {
     assert(n == nvar_);
 
+    // Running costs
     for (size_t i = 0; i < T_; i++) {
-        Eigen::VectorXd state   = Eigen::VectorXd::Map(x + i * (ndx_ + nu_), ndx_);
+        Eigen::VectorXd state   = state_->zero();
+        Eigen::VectorXd dstate  = Eigen::VectorXd::Map(x + i * (ndx_ + nu_), ndx_);
         Eigen::VectorXd control = Eigen::VectorXd::Map(x + i * (ndx_ + nu_) + ndx_, nu_);
+
+        state_->integrate(xs_[i], dstate, state);
 
         problem_->get_runningModels()[i]->calc(problem_->get_runningDatas()[i], state, control);
 
         obj_value += problem_->get_runningDatas()[i]->cost;
     }
 
-    Eigen::VectorXd state = Eigen::VectorXd::Map(x + T_ * (nx_ + nu_), nx_);
+    // Terminal costs
+    Eigen::VectorXd state  = state_->zero();
+    Eigen::VectorXd dstate = Eigen::VectorXd::Map(x + T_ * (ndx_ + nu_), ndx_);
+
+    state_->integrate(xs_[T_], dstate, state);
+
     problem_->get_terminalModel()->calc(problem_->get_terminalData(), state);
     obj_value += problem_->get_terminalData()->cost;
 
@@ -178,25 +182,41 @@ bool MultipleShootingNlp::eval_grad_f(Ipopt::Index n, const Ipopt::Number *x, bo
     assert(n == nvar_);
 
     for (size_t i = 0; i < T_; i++) {
-        Eigen::VectorXd state   = Eigen::VectorXd::Map(x + i * (nx_ + nu_), nx_);
-        Eigen::VectorXd control = Eigen::VectorXd::Map(x + i * (nx_ + nu_) + nx_, nu_);
+        Eigen::VectorXd state   = state_->zero();
+        Eigen::VectorXd dstate  = Eigen::VectorXd::Map(x + i * (ndx_ + nu_), ndx_);
+        Eigen::VectorXd control = Eigen::VectorXd::Map(x + i * (ndx_ + nu_) + ndx_, nu_);
 
+        Eigen::MatrixXd Jx  = Eigen::MatrixXd::Zero(ndx_, ndx_);
+        Eigen::MatrixXd Jdx = Eigen::MatrixXd::Zero(ndx_, ndx_);
+
+        state_->integrate(xs_[i], dstate, state);
         problem_->get_runningModels()[i]->calcDiff(problem_->get_runningDatas()[i], state, control);
 
-        for (size_t j = 0; j < nx_; j++) {
-            grad_f[i * (nx_ + nu_) + j] = problem_->get_runningDatas()[i]->Lx[j];
+        state_->Jintegrate(xs_[i], dstate, Jx, Jdx, crocoddyl::second, crocoddyl::setto);
+        Eigen::VectorXd Lx = problem_->get_runningDatas()[i]->Lx.transpose() * Jdx;
+
+        for (size_t j = 0; j < ndx_; j++) {
+            // grad_f[i * (nx_ + nu_) + j] = problem_->get_runningDatas()[i]->Lx[j];
+            grad_f[i * (ndx_ + nu_) + j] = Lx(j);
         }
 
         for (size_t j = 0; j < nu_; j++) {
-            grad_f[i * (nx_ + nu_) + nx_ + j] = problem_->get_runningDatas()[i]->Lu[j];
+            grad_f[i * (ndx_ + nu_) + ndx_ + j] = problem_->get_runningDatas()[i]->Lu[j];
         }
     }
 
-    Eigen::VectorXd state = Eigen::VectorXd::Map(x + T_ * (nx_ + nu_), nx_);
+    Eigen::VectorXd state  = state_->zero();
+    Eigen::VectorXd dstate = Eigen::VectorXd::Map(x + T_ * (ndx_ + nu_), ndx_);
+    state_->integrate(xs_[T_], dstate, state);
+
     problem_->get_terminalModel()->calcDiff(problem_->get_terminalData(), state);
 
-    for (size_t j = 0; j < nx_; j++) {
-        grad_f[T_ * (nx_ + nu_) + j] = problem_->get_terminalData()->Lx[j];
+    Eigen::MatrixXd Jx  = Eigen::MatrixXd::Zero(ndx_, ndx_);
+    Eigen::MatrixXd Jdx = Eigen::MatrixXd::Zero(ndx_, ndx_);
+    state_->Jintegrate(xs_[T_], dstate, Jx, Jdx, crocoddyl::second, crocoddyl::setto);
+    Eigen::VectorXd Lx = problem_->get_terminalData()->Lx.transpose() * Jdx;
+    for (size_t j = 0; j < ndx_; j++) {
+        grad_f[T_ * (ndx_ + nu_) + j] = Lx(j);
     }
 
     return true;
@@ -211,26 +231,37 @@ bool MultipleShootingNlp::eval_g(Ipopt::Index n, const Ipopt::Number *x, bool ne
     assert(m == nconst_);
 
     for (size_t i = 0; i < T_; i++) {
-        Eigen::VectorXd state      = Eigen::VectorXd::Map(x + i * (nx_ + nu_), nx_);
-        Eigen::VectorXd state_next = Eigen::VectorXd::Map(x + (i + 1) * (nx_ + nu_), nx_);
-        Eigen::VectorXd control    = Eigen::VectorXd::Map(x + i * (nx_ + nu_) + nx_, nu_);
+        Eigen::VectorXd state       = state_->zero();
+        Eigen::VectorXd state_next  = state_->zero();
+        Eigen::VectorXd dstate      = Eigen::VectorXd::Map(x + i * (ndx_ + nu_), ndx_);
+        Eigen::VectorXd dstate_next = Eigen::VectorXd::Map(x + (i + 1) * (ndx_ + nu_), ndx_);
+        Eigen::VectorXd control     = Eigen::VectorXd::Map(x + i * (ndx_ + nu_) + ndx_, nu_);
+
+        state_->integrate(xs_[i], dstate, state);
+        state_->integrate(xs_[i + 1], dstate_next, state_next);
 
         problem_->get_runningModels()[i]->calc(problem_->get_runningDatas()[i], state, control);
-        // problem_->get_runningModels()[i]->calcDiff(problem_->get_runningDatas()[i], state, control);
 
-        Eigen::VectorXd state_diff = state_next - problem_->get_runningDatas()[i]->xnext;
+        Eigen::VectorXd state_diff = Eigen::VectorXd::Zero(ndx_);
+        state_->diff(problem_->get_runningDatas()[i]->xnext, state_next, state_diff);
+        // state_next - problem_->get_runningDatas()[i]->xnext;
 
-        for (size_t j = 0; j < nx_; j++) {
+        for (size_t j = 0; j < ndx_; j++) {
             g[i * nx_ + j] = state_diff[j];
         }
     }
 
+    Eigen::VectorXd state  = state_->zero();
+    Eigen::VectorXd dstate = Eigen::VectorXd::Map(x, ndx_);
+    state_->integrate(xs_[0], dstate, state);
+
     for (size_t j = 0; j < nx_; j++) {
-        g[T_ * nx_ + j] = x[j];
+        g[T_ * ndx_ + j] = state[j];
     }
 
     return true;
 }
+
 // [TNLP_eval_g]
 
 // [TNLP_eval_jac_g]
@@ -251,10 +282,10 @@ bool MultipleShootingNlp::eval_jac_g(Ipopt::Index         n,
         std::size_t idx_value = 0;
         // Dynamic constraints
         for (size_t idx_block = 0; idx_block < T_; idx_block++) {
-            for (size_t idx_row = 0; idx_row < nx_; idx_row++) {
-                for (size_t idx_col = 0; idx_col < (2 * nx_ + nu_); idx_col++) {
-                    iRow[idx_value] = idx_block * nx_ + idx_row;
-                    jCol[idx_value] = idx_block * (nx_ + nu_) + idx_col;
+            for (size_t idx_row = 0; idx_row < ndx_; idx_row++) {
+                for (size_t idx_col = 0; idx_col < (2 * ndx_ + nu_); idx_col++) {
+                    iRow[idx_value] = idx_block * ndx_ + idx_row;
+                    jCol[idx_value] = idx_block * (ndx_ + nu_) + idx_col;
                     // x_k+1 could be more optimized since it is a diagonal
                     idx_value++;
                 }
@@ -263,12 +294,11 @@ bool MultipleShootingNlp::eval_jac_g(Ipopt::Index         n,
 
         // Initial condition
         for (size_t idx_row = 0; idx_row < nx_; idx_row++) {
-            for (size_t idx_col = 0; idx_col < nx_; idx_col++) {
+            for (size_t idx_col = 0; idx_col < ndx_; idx_col++) {
                 if (idx_row == idx_col) {
-                    iRow[idx_value] = T_ * nx_ + idx_row;
+                    iRow[idx_value] = T_ * ndx_ + idx_row;
                     jCol[idx_value] = idx_col;
                     idx_value++;
-                    break;
                 }
             }
         }
@@ -280,44 +310,71 @@ bool MultipleShootingNlp::eval_jac_g(Ipopt::Index         n,
 
         // Dynamic constraints
         for (size_t idx_block = 0; idx_block < T_; idx_block++) {
-            Eigen::VectorXd state      = Eigen::VectorXd::Map(x + idx_block * (nx_ + nu_), nx_);
-            Eigen::VectorXd state_next = Eigen::VectorXd::Map(x + (idx_block + 1) * (nx_ + nu_), nx_);
-            Eigen::VectorXd control    = Eigen::VectorXd::Map(x + idx_block * (nx_ + nu_) + nx_, nu_);
+            Eigen::VectorXd state       = state_->zero();
+            Eigen::VectorXd state_next  = state_->zero();
+            Eigen::VectorXd dstate      = Eigen::VectorXd::Map(x + idx_block * (ndx_ + nu_), ndx_);
+            Eigen::VectorXd dstate_next = Eigen::VectorXd::Map(x + (idx_block + 1) * (ndx_ + nu_), ndx_);
+            Eigen::VectorXd control     = Eigen::VectorXd::Map(x + idx_block * (ndx_ + nu_) + ndx_, nu_);
+
+            state_->integrate(xs_[idx_block], dstate, state);
+            state_->integrate(xs_[idx_block + 1], dstate_next, state_next);
 
             problem_->get_runningModels()[idx_block]->calc(problem_->get_runningDatas()[idx_block], state, control);
             problem_->get_runningModels()[idx_block]->calcDiff(problem_->get_runningDatas()[idx_block], state,
                                                                control);
 
-            for (size_t idx_row = 0; idx_row < nx_; idx_row++) {
-                for (size_t idx_col = 0; idx_col < nx_; idx_col++) {
-                    values[idx_value] = -problem_->get_runningDatas()[idx_block]->Fx(idx_row, idx_col);
+            Eigen::MatrixXd Jsum_x  = Eigen::MatrixXd::Zero(ndx_, ndx_);
+            Eigen::MatrixXd Jsum_dx = Eigen::MatrixXd::Zero(ndx_, ndx_);
+
+            Eigen::MatrixXd Jsum_xnext  = Eigen::MatrixXd::Zero(ndx_, ndx_);
+            Eigen::MatrixXd Jsum_dxnext = Eigen::MatrixXd::Zero(ndx_, ndx_);
+
+            Eigen::MatrixXd Jdiff_xnext = Eigen::MatrixXd::Zero(ndx_, ndx_);
+            Eigen::MatrixXd Jdiff_x     = Eigen::MatrixXd::Zero(ndx_, ndx_);
+
+            state_->Jintegrate(xs_[idx_block], dstate, Jsum_x, Jsum_dx, crocoddyl::second, crocoddyl::setto);
+            state_->Jintegrate(xs_[idx_block + 1], dstate_next, Jsum_xnext, Jsum_dxnext, crocoddyl::second,
+                               crocoddyl::setto);
+            state_->Jdiff(problem_->get_runningDatas()[idx_block]->xnext, state_next, Jdiff_x, Jdiff_xnext,
+                          crocoddyl::both);
+
+            Eigen::MatrixXd Jg_dx     = Jdiff_x * problem_->get_runningDatas()[idx_block]->Fx * Jsum_dx;
+            Eigen::MatrixXd Jg_u      = Jdiff_x * problem_->get_runningDatas()[idx_block]->Fu;
+            Eigen::MatrixXd Jg_dxnext = Jdiff_xnext * Jsum_dxnext;
+
+            for (size_t idx_row = 0; idx_row < ndx_; idx_row++) {
+                for (size_t idx_col = 0; idx_col < ndx_; idx_col++) {
+                    values[idx_value] = Jg_dx(idx_row, idx_col);
                     idx_value++;
                 }
 
                 for (size_t idx_col = 0; idx_col < nu_; idx_col++) {
-                    values[idx_value] = -problem_->get_runningDatas()[idx_block]->Fu(idx_row, idx_col);
+                    values[idx_value] = Jg_u(idx_row, idx_col);
                     idx_value++;
                 }
 
                 // This could be more optimized since there are a lot of zeros!
-                for (size_t idx_col = 0; idx_col < nx_; idx_col++) {
-                    values[idx_value] = idx_col == idx_row ? 1 : 0;
+                for (size_t idx_col = 0; idx_col < ndx_; idx_col++) {
+                    values[idx_value] = Jg_dxnext(idx_row, idx_col);
                     idx_value++;
                 }
             }
         }
+
+        Eigen::VectorXd dstate  = Eigen::VectorXd::Map(x, ndx_);
+        Eigen::MatrixXd Jsum_x  = Eigen::MatrixXd::Zero(ndx_, ndx_);
+        Eigen::MatrixXd Jsum_dx = Eigen::MatrixXd::Zero(ndx_, ndx_);
+
+        state_->Jintegrate(xs_[0], dstate, Jsum_x, Jsum_dx, crocoddyl::second, crocoddyl::setto);
 
         for (size_t idx_row = 0; idx_row < nx_; idx_row++) {
-            for (size_t idx_col = 0; idx_col < nx_; idx_col++) {
+            for (size_t idx_col = 0; idx_col < ndx_; idx_col++) {
                 if (idx_row == idx_col) {
-                    values[idx_value] = 1;
+                    values[idx_value] = Jsum_dx(idx_row, idx_col);
                     idx_value++;
-                    break;
                 }
             }
         }
-
-        // Initial condition
     }
 
     return true;
@@ -348,28 +405,28 @@ bool MultipleShootingNlp::eval_h(Ipopt::Index         n,
         // Running Costs
         std::size_t idx_value = 0;
         for (size_t idx_block = 0; idx_block < T_; idx_block++) {
-            for (size_t idx_row = 0; idx_row < nx_ + nu_; idx_row++) {
-                for (size_t idx_col = 0; idx_col < nx_ + nu_; idx_col++) {
+            for (size_t idx_row = 0; idx_row < ndx_ + nu_; idx_row++) {
+                for (size_t idx_col = 0; idx_col < ndx_ + nu_; idx_col++) {
                     // We need the lower triangular matrix
                     if (idx_col > idx_row) {
                         break;
                     }
-                    iRow[idx_value] = idx_block * (nx_ + nu_) + idx_row;
-                    jCol[idx_value] = idx_block * (nx_ + nu_) + idx_col;
+                    iRow[idx_value] = idx_block * (ndx_ + nu_) + idx_row;
+                    jCol[idx_value] = idx_block * (ndx_ + nu_) + idx_col;
                     idx_value++;
                 }
             }
         }
 
         // Terminal costs
-        for (size_t idx_row = 0; idx_row < nx_; idx_row++) {
-            for (size_t idx_col = 0; idx_col < nx_; idx_col++) {
+        for (size_t idx_row = 0; idx_row < ndx_; idx_row++) {
+            for (size_t idx_col = 0; idx_col < ndx_; idx_col++) {
                 // We need the lower triangular matrix
                 if (idx_col > idx_row) {
                     break;
                 }
-                iRow[idx_value] = T_ * (nx_ + nu_) + idx_row;
-                jCol[idx_value] = T_ * (nx_ + nu_) + idx_col;
+                iRow[idx_value] = T_ * (ndx_ + nu_) + idx_row;
+                jCol[idx_value] = T_ * (ndx_ + nu_) + idx_col;
                 idx_value++;
             }
         }
@@ -382,26 +439,35 @@ bool MultipleShootingNlp::eval_h(Ipopt::Index         n,
 
         // Running Costs
         for (size_t idx_block = 0; idx_block < T_; idx_block++) {
-            Eigen::VectorXd state      = Eigen::VectorXd::Map(x + idx_block * (nx_ + nu_), nx_);
-            Eigen::VectorXd state_next = Eigen::VectorXd::Map(x + (idx_block + 1) * (nx_ + nu_), nx_);
-            Eigen::VectorXd control    = Eigen::VectorXd::Map(x + idx_block * (nx_ + nu_) + nx_, nu_);
+            Eigen::VectorXd state   = state_->zero();
+            Eigen::VectorXd dstate  = Eigen::VectorXd::Map(x + idx_block * (ndx_ + nu_), ndx_);
+            Eigen::VectorXd control = Eigen::VectorXd::Map(x + idx_block * (ndx_ + nu_) + ndx_, nu_);
+
+            state_->integrate(xs_[idx_block], dstate, state);
 
             problem_->get_runningModels()[idx_block]->calcDiff(problem_->get_runningDatas()[idx_block], state,
                                                                control);
-            for (size_t idx_row = 0; idx_row < nx_; idx_row++) {
-                for (size_t idx_col = 0; idx_col < nx_; idx_col++) {
+            Eigen::MatrixXd Jsum_x  = Eigen::MatrixXd::Zero(ndx_, ndx_);
+            Eigen::MatrixXd Jsum_dx = Eigen::MatrixXd::Zero(ndx_, ndx_);
+
+            state_->Jintegrate(xs_[idx_block], dstate, Jsum_x, Jsum_dx, crocoddyl::second, crocoddyl::setto);
+            Eigen::MatrixXd Lxx = Jsum_dx.transpose() * problem_->get_runningDatas()[idx_block]->Lxx * Jsum_dx;
+            Eigen::MatrixXd Lxu = Jsum_dx.transpose() * problem_->get_runningDatas()[idx_block]->Lxu;
+
+            for (size_t idx_row = 0; idx_row < ndx_; idx_row++) {
+                for (size_t idx_col = 0; idx_col < ndx_; idx_col++) {
                     // We need the lower triangular matrix
                     if (idx_col > idx_row) {
                         break;
                     }
-                    values[idx_value] = problem_->get_runningDatas()[idx_block]->Lxx(idx_row, idx_col);
+                    values[idx_value] = Lxx(idx_row, idx_col);
                     idx_value++;
                 }
             }
 
             for (size_t idx_row = 0; idx_row < nu_; idx_row++) {
-                for (size_t idx_col = 0; idx_col < nx_; idx_col++) {
-                    values[idx_value] = problem_->get_runningDatas()[idx_block]->Lxu(idx_col, idx_row);
+                for (size_t idx_col = 0; idx_col < ndx_; idx_col++) {
+                    values[idx_value] = Lxu(idx_col, idx_row);
                     idx_value++;
                 }
 
@@ -416,15 +482,28 @@ bool MultipleShootingNlp::eval_h(Ipopt::Index         n,
         }
 
         // Terminal costs
-        Eigen::VectorXd state = Eigen::VectorXd::Map(x + T_ * (nx_ + nu_), nx_);
+        Eigen::VectorXd state  = state_->zero();
+        Eigen::VectorXd dstate = Eigen::VectorXd::Map(x + T_ * (ndx_ + nu_), ndx_);
+
+        state_->integrate(xs_[T_], dstate, state);
+
         problem_->get_terminalModel()->calcDiff(problem_->get_terminalData(), state);
-        for (size_t idx_row = 0; idx_row < nx_; idx_row++) {
-            for (size_t idx_col = 0; idx_col < nx_; idx_col++) {
+
+        Eigen::MatrixXd Jsum_x  = Eigen::MatrixXd::Zero(ndx_, ndx_);
+        Eigen::MatrixXd Jsum_dx = Eigen::MatrixXd::Zero(ndx_, ndx_);
+        state_->Jintegrate(xs_[T_], dstate, Jsum_x, Jsum_dx, crocoddyl::second, crocoddyl::setto);
+
+        Eigen::MatrixXd Lxx = Jsum_dx.transpose() * problem_->get_terminalData()->Lxx * Jsum_dx;
+
+        // Eigen::VectorXd state = Eigen::VectorXd::Map(x + T_ * (nx_ + nu_), nx_);
+        // problem_->get_terminalModel()->calcDiff(problem_->get_terminalData(), state);
+        for (size_t idx_row = 0; idx_row < ndx_; idx_row++) {
+            for (size_t idx_col = 0; idx_col < ndx_; idx_col++) {
                 // We need the lower triangular matrix
                 if (idx_col > idx_row) {
                     break;
                 }
-                values[idx_value] = problem_->get_terminalData()->Lxx(idx_row, idx_col);
+                values[idx_value] = Lxx(idx_row, idx_col);
                 idx_value++;
             }
         }
@@ -449,15 +528,21 @@ void MultipleShootingNlp::finalize_solution(Ipopt::SolverReturn               st
 {
     // Copy the solution to vector once solver is finished
     for (size_t i = 0; i < T_; i++) {
-        Eigen::VectorXd state   = Eigen::VectorXd::Map(x + i * (nx_ + nu_), nx_);
-        Eigen::VectorXd control = Eigen::VectorXd::Map(x + i * (nx_ + nu_) + nx_, nu_);
+        Eigen::VectorXd state   = state_->zero();
+        Eigen::VectorXd dstate  = Eigen::VectorXd::Map(x + i * (ndx_ + nu_), ndx_);
+        Eigen::VectorXd control = Eigen::VectorXd::Map(x + i * (ndx_ + nu_) + ndx_, nu_);
 
+        state_->integrate(xs_[i], dstate, state);
         xs_[i] = state;
         us_[i] = control;
     }
 
-    Eigen::VectorXd state = Eigen::VectorXd::Map(x + T_ * (nx_ + nu_), nx_);
-    xs_[T_]               = state;
+    Eigen::VectorXd state  = state_->zero();
+    Eigen::VectorXd dstate = Eigen::VectorXd::Map(x + T_ * (ndx_ + nu_), ndx_);
+
+    state_->integrate(xs_[T_], dstate, state);
+
+    xs_[T_] = state;
 }
 // [TNLP_finalize_solution]
 

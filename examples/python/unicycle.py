@@ -16,4 +16,4 @@ solver = ipcroco.SolverIpOpt(problem)
 
 solver.solve()
 
-print()
+pass
