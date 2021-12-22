@@ -11,7 +11,7 @@ find_package(ipopt REQUIRED)
 
 # Library
 
-add_library(croco_ipopt src/multiple-shooting-nlp.cpp)
+add_library(croco_ipopt src/multiple-shooting-nlp.cpp src/ipopt.cpp)
 
 target_include_directories(
   croco_ipopt
@@ -33,6 +33,7 @@ target_link_libraries(unicycle PUBLIC crocoddyl::crocoddyl ipopt croco_ipopt)
 # unicycle raw
 add_executable(unicycle_raw src/unicycle_raw.cpp)
 
-target_include_directories(unicycle_raw PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(unicycle_raw
+                           PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 target_link_libraries(unicycle_raw PUBLIC crocoddyl::crocoddyl ipopt)

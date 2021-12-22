@@ -7,31 +7,28 @@
 
 #include <iostream>
 
-using namespace Ipopt;
-
 #ifdef __GNUC__
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #endif
 
-MultipleShootingNlp::MultipleShootingNlp(const boost::shared_ptr<crocoddyl::ShootingProblem> &problem,
-                                         bool                                                 printiterate)
-
+MultipleShootingNlp::MultipleShootingNlp(const boost::shared_ptr<crocoddyl::ShootingProblem> &problem)
     : problem_(problem),
       nx_(problem_->get_nx()),
       nu_(problem_->get_nu_max()),
       T_(problem_->get_T()),
       nvar_(T_ * (nx_ + nu_) + nx_),  // Multiple shooting, states and controls
-      nconst_((T_ + 1) * nx_),        // T*nx eq. constraints for dynamics , nx eq constraints for initial conditions
-      printiterate_(printiterate)
+      nconst_((T_ + 1) * nx_)         // T*nx eq. constraints for dynamics , nx eq constraints for initial conditions
 {
+    xs_.resize(T_ + 1);
+    us_.resize(T_);
 }
 
 MultipleShootingNlp::~MultipleShootingNlp() {}
 
-bool MultipleShootingNlp::get_nlp_info(Index          &n,
-                                       Index          &m,
-                                       Index          &nnz_jac_g,
-                                       Index          &nnz_h_lag,
+bool MultipleShootingNlp::get_nlp_info(Ipopt::Index   &n,
+                                       Ipopt::Index   &m,
+                                       Ipopt::Index   &nnz_jac_g,
+                                       Ipopt::Index   &nnz_h_lag,
                                        IndexStyleEnum &index_style)
 {
     n = nvar_;
@@ -60,7 +57,7 @@ bool MultipleShootingNlp::get_nlp_info(Index          &n,
     nnz_h_lag += nonzero;
 
     // use the C style indexing (0-based)
-    index_style = TNLP::C_STYLE;
+    index_style = Ipopt::TNLP::C_STYLE;
 
     return true;
 }
@@ -68,7 +65,12 @@ bool MultipleShootingNlp::get_nlp_info(Index          &n,
 
 // [TNLP_get_bounds_info]
 // returns the variable bounds
-bool MultipleShootingNlp::get_bounds_info(Index n, Number *x_l, Number *x_u, Index m, Number *g_l, Number *g_u)
+bool MultipleShootingNlp::get_bounds_info(Ipopt::Index   n,
+                                          Ipopt::Number *x_l,
+                                          Ipopt::Number *x_u,
+                                          Ipopt::Index   m,
+                                          Ipopt::Number *g_l,
+                                          Ipopt::Number *g_u)
 {
     // here, the n and m we gave IPOPT in get_nlp_info are passed back to us.
     // If desired, we could assert to make sure they are what we think they are.
@@ -76,18 +78,18 @@ bool MultipleShootingNlp::get_bounds_info(Index n, Number *x_l, Number *x_u, Ind
     assert(m == nconst_);
 
     // the variables have lower bounds of 1
-    for (Index i = 0; i < n; i++) {
+    for (Ipopt::Index i = 0; i < n; i++) {
         x_l[i] = -2e19;
         x_u[i] = 2e19;
     }
 
     // Dynamics
-    for (Index i = 0; i < nconst_ - nx_; i++) {
+    for (Ipopt::Index i = 0; i < nconst_ - nx_; i++) {
         g_l[i] = 0;
         g_u[i] = 0;
     }
 
-    for (Index i = 0; i < nx_; i++) {
+    for (Ipopt::Index i = 0; i < nx_; i++) {
         g_l[nconst_ - nx_ + i] = problem_->get_x0()[i];
         g_u[nconst_ - nx_ + i] = problem_->get_x0()[i];
     }
@@ -98,15 +100,15 @@ bool MultipleShootingNlp::get_bounds_info(Index n, Number *x_l, Number *x_u, Ind
 
 // [TNLP_get_starting_point]
 // returns the initial point for the problem
-bool MultipleShootingNlp::get_starting_point(Index   n,
-                                             bool    init_x,
-                                             Number *x,
-                                             bool    init_z,
-                                             Number *z_L,
-                                             Number *z_U,
-                                             Index   m,
-                                             bool    init_lambda,
-                                             Number *lambda)
+bool MultipleShootingNlp::get_starting_point(Ipopt::Index   n,
+                                             bool           init_x,
+                                             Ipopt::Number *x,
+                                             bool           init_z,
+                                             Ipopt::Number *z_L,
+                                             Ipopt::Number *z_U,
+                                             Ipopt::Index   m,
+                                             bool           init_lambda,
+                                             Ipopt::Number *lambda)
 {
     // Here, we assume we only have starting values for x, if you code
     // your own NLP, you can provide starting values for the dual variables
@@ -126,7 +128,7 @@ bool MultipleShootingNlp::get_starting_point(Index   n,
 
 // [TNLP_eval_f]
 // returns the value of the objective function
-bool MultipleShootingNlp::eval_f(Index n, const Number *x, bool new_x, Number &obj_value)
+bool MultipleShootingNlp::eval_f(Ipopt::Index n, const Ipopt::Number *x, bool new_x, Ipopt::Number &obj_value)
 {
     assert(n == nvar_);
 
@@ -149,7 +151,7 @@ bool MultipleShootingNlp::eval_f(Index n, const Number *x, bool new_x, Number &o
 
 // [TNLP_eval_grad_f]
 // return the gradient of the objective function grad_{x} f(x)
-bool MultipleShootingNlp::eval_grad_f(Index n, const Number *x, bool new_x, Number *grad_f)
+bool MultipleShootingNlp::eval_grad_f(Ipopt::Index n, const Ipopt::Number *x, bool new_x, Ipopt::Number *grad_f)
 {
     assert(n == nvar_);
 
@@ -157,7 +159,6 @@ bool MultipleShootingNlp::eval_grad_f(Index n, const Number *x, bool new_x, Numb
         Eigen::VectorXd state   = Eigen::VectorXd::Map(x + i * (nx_ + nu_), nx_);
         Eigen::VectorXd control = Eigen::VectorXd::Map(x + i * (nx_ + nu_) + nx_, nu_);
 
-        // problem_->get_runningModels()[i]->calc(problem_->get_runningDatas()[i], state, control);
         problem_->get_runningModels()[i]->calcDiff(problem_->get_runningDatas()[i], state, control);
 
         for (size_t j = 0; j < nx_; j++) {
@@ -182,7 +183,7 @@ bool MultipleShootingNlp::eval_grad_f(Index n, const Number *x, bool new_x, Numb
 
 // [TNLP_eval_g]
 // return the value of the constraints: g(x)
-bool MultipleShootingNlp::eval_g(Index n, const Number *x, bool new_x, Index m, Number *g)
+bool MultipleShootingNlp::eval_g(Ipopt::Index n, const Ipopt::Number *x, bool new_x, Ipopt::Index m, Ipopt::Number *g)
 {
     assert(n == nvar_);
     assert(m == nconst_);
@@ -212,14 +213,14 @@ bool MultipleShootingNlp::eval_g(Index n, const Number *x, bool new_x, Index m, 
 
 // [TNLP_eval_jac_g]
 // return the structure or values of the Jacobian
-bool MultipleShootingNlp::eval_jac_g(Index         n,
-                                     const Number *x,
-                                     bool          new_x,
-                                     Index         m,
-                                     Index         nele_jac,
-                                     Index        *iRow,
-                                     Index        *jCol,
-                                     Number       *values)
+bool MultipleShootingNlp::eval_jac_g(Ipopt::Index         n,
+                                     const Ipopt::Number *x,
+                                     bool                 new_x,
+                                     Ipopt::Index         m,
+                                     Ipopt::Index         nele_jac,
+                                     Ipopt::Index        *iRow,
+                                     Ipopt::Index        *jCol,
+                                     Ipopt::Number       *values)
 {
     assert(n == nvar_);
     assert(m == nconst_);
@@ -303,17 +304,17 @@ bool MultipleShootingNlp::eval_jac_g(Index         n,
 
 // [TNLP_eval_h]
 // return the structure or values of the Hessian
-bool MultipleShootingNlp::eval_h(Index         n,
-                                 const Number *x,
-                                 bool          new_x,
-                                 Number        obj_factor,
-                                 Index         m,
-                                 const Number *lambda,
-                                 bool          new_lambda,
-                                 Index         nele_hess,
-                                 Index        *iRow,
-                                 Index        *jCol,
-                                 Number       *values)
+bool MultipleShootingNlp::eval_h(Ipopt::Index         n,
+                                 const Ipopt::Number *x,
+                                 bool                 new_x,
+                                 Ipopt::Number        obj_factor,
+                                 Ipopt::Index         m,
+                                 const Ipopt::Number *lambda,
+                                 bool                 new_lambda,
+                                 Ipopt::Index         nele_hess,
+                                 Ipopt::Index        *iRow,
+                                 Ipopt::Index        *jCol,
+                                 Ipopt::Number       *values)
 {
     assert(n == nvar_);
     assert(m == nconst_);
@@ -412,90 +413,51 @@ bool MultipleShootingNlp::eval_h(Index         n,
 // [TNLP_eval_h]
 
 // [TNLP_finalize_solution]
-void MultipleShootingNlp::finalize_solution(SolverReturn               status,
-                                            Index                      n,
-                                            const Number              *x,
-                                            const Number              *z_L,
-                                            const Number              *z_U,
-                                            Index                      m,
-                                            const Number              *g,
-                                            const Number              *lambda,
-                                            Number                     obj_value,
-                                            const IpoptData           *ip_data,
-                                            IpoptCalculatedQuantities *ip_cq)
+void MultipleShootingNlp::finalize_solution(Ipopt::SolverReturn               status,
+                                            Ipopt::Index                      n,
+                                            const Ipopt::Number              *x,
+                                            const Ipopt::Number              *z_L,
+                                            const Ipopt::Number              *z_U,
+                                            Ipopt::Index                      m,
+                                            const Ipopt::Number              *g,
+                                            const Ipopt::Number              *lambda,
+                                            Ipopt::Number                     obj_value,
+                                            const Ipopt::IpoptData           *ip_data,
+                                            Ipopt::IpoptCalculatedQuantities *ip_cq)
 {
-    // here is where we would store the solution to variables, or write to a file, etc
-    // so we could use the solution.
+    for (size_t i = 0; i < T_; i++) {
+        Eigen::VectorXd state   = Eigen::VectorXd::Map(x + i * (nx_ + nu_), nx_);
+        Eigen::VectorXd control = Eigen::VectorXd::Map(x + i * (nx_ + nu_) + nx_, nu_);
+
+        xs_[i] = state;
+        us_[i] = control;
+    }
+
+    Eigen::VectorXd state = Eigen::VectorXd::Map(x + T_ * (nx_ + nu_), nx_);
+    xs_[T_]               = state;
 }
 // [TNLP_finalize_solution]
 
 // [TNLP_intermediate_callback]
-bool MultipleShootingNlp::intermediate_callback(AlgorithmMode              mode,
-                                                Index                      iter,
-                                                Number                     obj_value,
-                                                Number                     inf_pr,
-                                                Number                     inf_du,
-                                                Number                     mu,
-                                                Number                     d_norm,
-                                                Number                     regularization_size,
-                                                Number                     alpha_du,
-                                                Number                     alpha_pr,
-                                                Index                      ls_trials,
-                                                const IpoptData           *ip_data,
-                                                IpoptCalculatedQuantities *ip_cq)
+bool MultipleShootingNlp::intermediate_callback(Ipopt::AlgorithmMode              mode,
+                                                Ipopt::Index                      iter,
+                                                Ipopt::Number                     obj_value,
+                                                Ipopt::Number                     inf_pr,
+                                                Ipopt::Number                     inf_du,
+                                                Ipopt::Number                     mu,
+                                                Ipopt::Number                     d_norm,
+                                                Ipopt::Number                     regularization_size,
+                                                Ipopt::Number                     alpha_du,
+                                                Ipopt::Number                     alpha_pr,
+                                                Ipopt::Index                      ls_trials,
+                                                const Ipopt::IpoptData           *ip_data,
+                                                Ipopt::IpoptCalculatedQuantities *ip_cq)
 {
-    if (!printiterate_) {
-        return true;
-    }
-
-    Number x[8];
-    Number x_L_viol[8];
-    Number x_U_viol[8];
-    Number z_L[8];
-    Number z_U[8];
-    Number compl_x_L[8];
-    Number compl_x_U[8];
-    Number grad_lag_x[8];
-
-    Number g[6];
-    Number lambda[6];
-    Number constraint_violation[6];
-    Number compl_g[6];
-
-    bool have_iter = get_curr_iterate(ip_data, ip_cq, false, 8, x, z_L, z_U, 6, g, lambda);
-    bool have_viol = get_curr_violations(ip_data, ip_cq, false, 8, x_L_viol, x_U_viol, compl_x_L, compl_x_U,
-                                         grad_lag_x, 6, constraint_violation, compl_g);
-
-    printf("Current iterate:\n");
-    printf("  %-12s %-12s %-12s %-12s %-12s %-12s %-12s\n", "x", "z_L", "z_U", "bound_viol", "compl_x_L", "compl_x_U",
-           "grad_lag_x");
-    for (int i = 0; i < 8; ++i) {
-        if (have_iter) {
-            printf("  %-12g %-12g %-12g", x[i], z_L[i], z_U[i]);
-        } else {
-            printf("  %-12s %-12s %-12s", "n/a", "n/a", "n/a");
-        }
-        if (have_viol) {
-            printf(" %-12g %-12g %-12g %-12g\n", x_L_viol[i] > x_U_viol[i] ? x_L_viol[i] : x_U_viol[i], compl_x_L[i],
-                   compl_x_U[i], grad_lag_x[i]);
-        } else {
-            printf(" %-12s %-12s %-12s %-12s\n", "n/a", "n/a", "n/a", "n/a");
-        }
-    }
-
-    printf("  %-12s %-12s %-12s %-12s\n", "g(x)", "lambda", "constr_viol", "compl_g");
-    for (int i = 0; i < 6; ++i) {
-        if (have_iter) {
-            printf("  %-12g %-12g", g[i], lambda[i]);
-        } else {
-            printf("  %-12s %-12s", "n/a", "n/a");
-        }
-        if (have_viol) {
-            printf(" %-12g %-12g\n", constraint_violation[i], compl_g[i]);
-        } else {
-            printf(" %-12s %-12s\n", "n/a", "n/a");
-        }
-    }
-
     return true;
 }
+
+const std::size_t &MultipleShootingNlp::get_nvar() const { return nvar_; }
+
+const std::vector<Eigen::VectorXd> &MultipleShootingNlp::get_xs() const { return xs_; }
+
+const std::vector<Eigen::VectorXd> &MultipleShootingNlp::get_us() const { return us_; }
