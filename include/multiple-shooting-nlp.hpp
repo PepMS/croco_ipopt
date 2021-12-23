@@ -115,9 +115,8 @@ class MultipleShootingNlp : public Ipopt::TNLP
     const std::vector<Eigen::VectorXd>                  &get_us() const;
     const boost::shared_ptr<crocoddyl::ShootingProblem> &get_problem() const;
 
-      void set_xs(const std::vector<Eigen::VectorXd>& xs);
-      void set_us(const std::vector<Eigen::VectorXd>& us);
-
+    void set_xs(const std::vector<Eigen::VectorXd> &xs);
+    void set_us(const std::vector<Eigen::VectorXd> &us);
 
     private:
     boost::shared_ptr<crocoddyl::ShootingProblem> problem_;
@@ -134,7 +133,31 @@ class MultipleShootingNlp : public Ipopt::TNLP
     std::size_t nconst_;
     std::size_t nvar_;
 
-    bool is_manifold_;
+    struct Data {
+        Eigen::VectorXd x;
+        Eigen::VectorXd xnext;
+        Eigen::VectorXd dx;
+        Eigen::VectorXd dxnext;
+        Eigen::VectorXd x_diff;
+        Eigen::VectorXd control;
+
+        Eigen::MatrixXd Jsum_x;
+        Eigen::MatrixXd Jsum_dx;
+
+        Eigen::MatrixXd Jsum_xnext;
+        Eigen::MatrixXd Jsum_dxnext;
+
+        Eigen::MatrixXd Jdiff_xnext;
+        Eigen::MatrixXd Jdiff_x;
+
+        Eigen::MatrixXd Jg_dx;
+        Eigen::MatrixXd Jg_dxnext;
+        Eigen::MatrixXd Jg_u;
+
+        Eigen::VectorXd Ldx;
+        Eigen::MatrixXd Ldxdx;
+        Eigen::MatrixXd Ldxu;
+    } data_;
 
     /**@name Methods to block default compiler methods.
      *
