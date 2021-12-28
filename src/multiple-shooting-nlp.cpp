@@ -109,10 +109,33 @@ bool MultipleShootingNlp::get_bounds_info(Ipopt::Index   n,
     assert(n == nvar_);
     assert(m == nconst_);
 
-    // the variables have lower bounds of 1
-    for (Ipopt::Index i = 0; i < n; i++) {
-        x_l[i] = -2e19;
-        x_u[i] = 2e19;
+    // // the variables have lower bounds of 1
+    // for (Ipopt::Index i = 0; i < n; i++) {
+    //     x_l[i] = -2e19;
+    //     x_u[i] = 2e19;
+    // }
+
+    // Adding bounds
+    for (size_t i = 0; i < T_; i++) {
+        // Running state bounds
+        for (size_t j = 0; j < ndx_; j++) {
+            x_l[i * (ndx_ + nu_) + j] = -2e19;
+            x_u[i * (ndx_ + nu_) + j] = 2e19;
+        }
+        // Control bounds
+        for (size_t j = 0; j < nu_; j++) {
+            x_l[i * (ndx_ + nu_) + ndx_ + j] = problem_->get_runningModels()[i]->get_has_control_limits()
+                                                   ? problem_->get_runningModels()[i]->get_u_lb()(j)
+                                                   : -2e19;
+            x_u[i * (ndx_ + nu_) + ndx_ + j] = problem_->get_runningModels()[i]->get_has_control_limits()
+                                                   ? problem_->get_runningModels()[i]->get_u_ub()(j)
+                                                   : 2e19;
+        }
+    }
+    // Final state bounds
+    for (size_t j = 0; j < ndx_; j++) {
+        x_l[T_ * (ndx_ + nu_) + j] = -2e19;
+        x_u[T_ * (ndx_ + nu_) + j] = 2e19;
     }
 
     // Dynamics
